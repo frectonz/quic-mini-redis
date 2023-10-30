@@ -3,6 +3,7 @@
 //! Provides an async connect and methods for issuing the supported commands.
 
 use crate::cmd::{Get, Ping, Publish, Set, Subscribe, Unsubscribe};
+use crate::setup::setup_client_endpoint;
 use crate::{Connection, Frame};
 
 use async_stream::try_stream;
@@ -79,61 +80,25 @@ impl Client {
         // connection. An error at either step returns an error, which is then
         // bubbled up to the caller of `mini_redis` connect.
 
-        struct SkipServerVerification;
-
-        impl SkipServerVerification {
-            fn new() -> std::sync::Arc<Self> {
-                std::sync::Arc::new(Self)
-            }
-        }
-
-        impl rustls::client::ServerCertVerifier for SkipServerVerification {
-            fn verify_server_cert(
-                &self,
-                _end_entity: &rustls::Certificate,
-                _intermediates: &[rustls::Certificate],
-                _server_name: &rustls::ServerName,
-                _scts: &mut dyn Iterator<Item = &[u8]>,
-                _ocsp_response: &[u8],
-                _now: std::time::SystemTime,
-            ) -> Result<rustls::client::ServerCertVerified, rustls::Error> {
-                Ok(rustls::client::ServerCertVerified::assertion())
-            }
-        }
-
-        fn configure_client() -> quinn::ClientConfig {
-            let crypto = rustls::ClientConfig::builder()
-                .with_safe_defaults()
-                .with_custom_certificate_verifier(SkipServerVerification::new())
-                .with_no_client_auth();
-
-            quinn::ClientConfig::new(std::sync::Arc::new(crypto))
-        }
-
-        pub fn make_client_endpoint(
-            bind_addr: std::net::SocketAddr,
-        ) -> crate::Result<quinn::Endpoint> {
-            let client_cfg = configure_client();
-            let mut endpoint = quinn::Endpoint::client(bind_addr)?;
-            endpoint.set_default_client_config(client_cfg);
-            Ok(endpoint)
-        }
-
         let addrs = lookup_host(addr).await?;
-        let endpoint = make_client_endpoint(([127, 0, 0, 1], 0).into())?;
+        let endpoint = setup_client_endpoint()?;
 
+        let mut conn = None;
         for addr in addrs {
             // Initialize the connection state. This allocates read/write buffers to
             // perform redis protocol frame parsing.
-            let conn = endpoint.connect(addr, "localhost")?;
-            let conn = conn.await?;
-            let (send_stream, recv_stream) = conn.open_bi().await?;
-            let connection = Connection::new(send_stream, recv_stream);
-
-            return Ok(Client { connection });
+            if let Ok(c) = endpoint.connect(addr, "localhost") {
+                conn = Some(c);
+                break;
+            };
         }
 
-        Err("No address found".into())
+        let conn = conn.ok_or("No address found".to_string())?;
+        let conn = conn.await?;
+        let (send_stream, recv_stream) = conn.open_bi().await?;
+        let connection = Connection::new(send_stream, recv_stream);
+
+        Ok(Client { connection })
     }
 
     /// Ping to the server.

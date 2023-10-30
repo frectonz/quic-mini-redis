@@ -6,12 +6,9 @@
 //!
 //! The `clap` crate is used for parsing arguments.
 
-use std::sync::Arc;
-
-use mini_redis::{server, DEFAULT_PORT};
+use mini_redis::{server, setup::setup_server_endpoint};
 
 use clap::Parser;
-use quinn::Endpoint;
 use tokio::signal;
 
 #[cfg(feature = "otel")]
@@ -34,33 +31,10 @@ use tracing_subscriber::{
 pub async fn main() -> mini_redis::Result<()> {
     set_up_logging()?;
 
-    let cli = Cli::parse();
-    let _port = cli.port.unwrap_or(DEFAULT_PORT);
+    // let cli = Cli::parse();
+    // let port = cli.port.unwrap_or(DEFAULT_PORT);
 
-    pub fn make_server_endpoint(
-        bind_addr: std::net::SocketAddr,
-    ) -> mini_redis::Result<quinn::Endpoint> {
-        let server_config = configure_server()?;
-        let endpoint = Endpoint::server(server_config, bind_addr)?;
-        Ok(endpoint)
-    }
-
-    pub fn configure_server() -> mini_redis::Result<quinn::ServerConfig> {
-        let crt = std::fs::read("cert/cert.der")?;
-        let key = std::fs::read("cert/key.der")?;
-
-        let priv_key = rustls::PrivateKey(key);
-        let cert_chain = vec![rustls::Certificate(crt)];
-
-        let mut server_config = quinn::ServerConfig::with_single_cert(cert_chain, priv_key)?;
-        if let Some(transport_config) = Arc::get_mut(&mut server_config.transport) {
-            transport_config.max_concurrent_uni_streams(0_u8.into());
-        }
-
-        Ok(server_config)
-    }
-
-    let endpoint = make_server_endpoint(([127, 0, 0, 1], 5000).into())?;
+    let endpoint = setup_server_endpoint()?;
 
     server::run(endpoint, signal::ctrl_c()).await;
 
@@ -70,8 +44,8 @@ pub async fn main() -> mini_redis::Result<()> {
 #[derive(Parser, Debug)]
 #[clap(name = "mini-redis-server", version, author, about = "A Redis server")]
 struct Cli {
-    #[clap(long)]
-    port: Option<u16>,
+    // #[clap(long)]
+    // port: Option<u16>,
 }
 
 #[cfg(not(feature = "otel"))]

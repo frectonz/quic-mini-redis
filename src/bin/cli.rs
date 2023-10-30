@@ -1,4 +1,4 @@
-use mini_redis::{clients::Client, DEFAULT_PORT};
+use mini_redis::clients::Client;
 
 use bytes::Bytes;
 use clap::{Parser, Subcommand};
@@ -17,12 +17,10 @@ use std::time::Duration;
 struct Cli {
     #[clap(subcommand)]
     command: Command,
-
-    #[clap(name = "hostname", long, default_value = "127.0.0.1")]
-    host: String,
-
-    #[clap(long, default_value_t = DEFAULT_PORT)]
-    port: u16,
+    // #[clap(name = "hostname", long, default_value = "127.0.0.1")]
+    // host: String,
+    // #[clap(long, default_value_t = DEFAULT_PORT)]
+    // port: u16,
 }
 
 #[derive(Subcommand, Debug)]
@@ -84,10 +82,10 @@ async fn main() -> mini_redis::Result<()> {
     let cli = Cli::parse();
 
     // Get the remote address to connect to
-    let addr = format!("{}:{}", cli.host, cli.port);
+    // let addr = format!("{}:{}", cli.host, cli.port);
 
     // Establish a connection
-    let mut client = Client::connect(&addr).await?;
+    let mut client = Client::connect("localhost:5000").await?;
 
     // Process the requested command
     match cli.command {
