@@ -9,7 +9,7 @@ use async_stream::try_stream;
 use bytes::Bytes;
 use std::io::{Error, ErrorKind};
 use std::time::Duration;
-use tokio::net::{TcpStream, ToSocketAddrs};
+use tokio::net::{lookup_host, ToSocketAddrs};
 use tokio_stream::Stream;
 use tracing::{debug, instrument};
 
@@ -78,13 +78,62 @@ impl Client {
         // performs any asynchronous DNS lookup and attempts to establish the TCP
         // connection. An error at either step returns an error, which is then
         // bubbled up to the caller of `mini_redis` connect.
-        let socket = TcpStream::connect(addr).await?;
 
-        // Initialize the connection state. This allocates read/write buffers to
-        // perform redis protocol frame parsing.
-        let connection = Connection::new(socket);
+        struct SkipServerVerification;
 
-        Ok(Client { connection })
+        impl SkipServerVerification {
+            fn new() -> std::sync::Arc<Self> {
+                std::sync::Arc::new(Self)
+            }
+        }
+
+        impl rustls::client::ServerCertVerifier for SkipServerVerification {
+            fn verify_server_cert(
+                &self,
+                _end_entity: &rustls::Certificate,
+                _intermediates: &[rustls::Certificate],
+                _server_name: &rustls::ServerName,
+                _scts: &mut dyn Iterator<Item = &[u8]>,
+                _ocsp_response: &[u8],
+                _now: std::time::SystemTime,
+            ) -> Result<rustls::client::ServerCertVerified, rustls::Error> {
+                Ok(rustls::client::ServerCertVerified::assertion())
+            }
+        }
+
+        fn configure_client() -> quinn::ClientConfig {
+            let crypto = rustls::ClientConfig::builder()
+                .with_safe_defaults()
+                .with_custom_certificate_verifier(SkipServerVerification::new())
+                .with_no_client_auth();
+
+            quinn::ClientConfig::new(std::sync::Arc::new(crypto))
+        }
+
+        pub fn make_client_endpoint(
+            bind_addr: std::net::SocketAddr,
+        ) -> crate::Result<quinn::Endpoint> {
+            let client_cfg = configure_client();
+            let mut endpoint = quinn::Endpoint::client(bind_addr)?;
+            endpoint.set_default_client_config(client_cfg);
+            Ok(endpoint)
+        }
+
+        let addrs = lookup_host(addr).await?;
+        let endpoint = make_client_endpoint(([127, 0, 0, 1], 0).into())?;
+
+        for addr in addrs {
+            // Initialize the connection state. This allocates read/write buffers to
+            // perform redis protocol frame parsing.
+            let conn = endpoint.connect(addr, "localhost")?;
+            let conn = conn.await?;
+            let (send_stream, recv_stream) = conn.open_bi().await?;
+            let connection = Connection::new(send_stream, recv_stream);
+
+            return Ok(Client { connection });
+        }
+
+        Err("No address found".into())
     }
 
     /// Ping to the server.

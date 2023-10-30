@@ -5,9 +5,9 @@
 
 use crate::{Command, Connection, Db, DbDropGuard, Shutdown};
 
+use quinn::Endpoint;
 use std::future::Future;
 use std::sync::Arc;
-use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc, Semaphore};
 use tokio::time::{self, Duration};
 use tracing::{debug, error, info, instrument};
@@ -25,8 +25,8 @@ struct Listener {
     /// retrieved and passed into the per connection state (`Handler`).
     db_holder: DbDropGuard,
 
-    /// TCP listener supplied by the `run` caller.
-    listener: TcpListener,
+    /// QUIC endpoint supplied by the `run` caller.
+    endpoint: Endpoint,
 
     /// Limit the max number of connections.
     ///
@@ -113,14 +113,14 @@ const MAX_CONNECTIONS: usize = 250;
 
 /// Run the mini-redis server.
 ///
-/// Accepts connections from the supplied listener. For each inbound connection,
+/// Accepts connections from the supplied endpoint. For each inbound connection,
 /// a task is spawned to handle that connection. The server runs until the
 /// `shutdown` future completes, at which point the server shuts down
 /// gracefully.
 ///
 /// `tokio::signal::ctrl_c()` can be used as the `shutdown` argument. This will
 /// listen for a SIGINT signal.
-pub async fn run(listener: TcpListener, shutdown: impl Future) {
+pub async fn run(endpoint: Endpoint, shutdown: impl Future) {
     // When the provided `shutdown` future completes, we must send a shutdown
     // message to all active connections. We use a broadcast channel for this
     // purpose. The call below ignores the receiver of the broadcast pair, and when
@@ -131,7 +131,7 @@ pub async fn run(listener: TcpListener, shutdown: impl Future) {
 
     // Initialize the listener state
     let mut server = Listener {
-        listener,
+        endpoint,
         db_holder: DbDropGuard::new(),
         limit_connections: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
         notify_shutdown,
@@ -235,7 +235,8 @@ impl Listener {
             // Accept a new socket. This will attempt to perform error handling.
             // The `accept` method internally attempts to recover errors, so an
             // error here is non-recoverable.
-            let socket = self.accept().await?;
+            let connection = self.accept().await?;
+            let (send_stream, recv_stream) = connection.accept_bi().await?;
 
             // Create the necessary per-connection handler state.
             let mut handler = Handler {
@@ -244,7 +245,7 @@ impl Listener {
 
                 // Initialize the connection state. This allocates read/write
                 // buffers to perform redis protocol frame parsing.
-                connection: Connection::new(socket),
+                connection: Connection::new(send_stream, recv_stream),
 
                 // Receive shutdown notifications.
                 shutdown: Shutdown::new(self.notify_shutdown.subscribe()),
@@ -269,21 +270,20 @@ impl Listener {
     }
 
     /// Accept an inbound connection.
-    ///
-    /// Errors are handled by backing off and retrying. An exponential backoff
-    /// strategy is used. After the first failure, the task waits for 1 second.
-    /// After the second failure, the task waits for 2 seconds. Each subsequent
-    /// failure doubles the wait time. If accepting fails on the 6th try after
-    /// waiting for 64 seconds, then this function returns with an error.
-    async fn accept(&mut self) -> crate::Result<TcpStream> {
+    async fn accept(&mut self) -> crate::Result<quinn::Connection> {
         let mut backoff = 1;
 
         // Try to accept a few times
         loop {
             // Perform the accept operation. If a socket is successfully
             // accepted, return it. Otherwise, save the error.
-            match self.listener.accept().await {
-                Ok((socket, _)) => return Ok(socket),
+            let connecting = self
+                .endpoint
+                .accept()
+                .await
+                .ok_or("faild to get connection")?;
+            match connecting.await {
+                Ok(conn) => return Ok(conn),
                 Err(err) => {
                     if backoff > 64 {
                         // Accept has failed too many times. Return the error.

@@ -2,8 +2,7 @@ use crate::frame::{self, Frame};
 
 use bytes::{Buf, BytesMut};
 use std::io::{self, Cursor};
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
-use tokio::net::TcpStream;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 
 /// Send and receive `Frame` values from a remote peer.
 ///
@@ -19,10 +18,15 @@ use tokio::net::TcpStream;
 /// The contents of the write buffer are then written to the socket.
 #[derive(Debug)]
 pub struct Connection {
-    // The `TcpStream`. It is decorated with a `BufWriter`, which provides write
+    // The `QUIC SendStream`. It is decorated with a `BufWriter`, which provides write
     // level buffering. The `BufWriter` implementation provided by Tokio is
     // sufficient for our needs.
-    stream: BufWriter<TcpStream>,
+    send_stream: BufWriter<quinn::SendStream>,
+
+    // The `QUIC RecvStream`. It is decorated with a `BufReader`, which provides read
+    // level buffering. The `BufReader` implementation provided by Tokio is
+    // sufficient for our needs.
+    recv_stream: BufReader<quinn::RecvStream>,
 
     // The buffer for reading frames.
     buffer: BytesMut,
@@ -31,9 +35,11 @@ pub struct Connection {
 impl Connection {
     /// Create a new `Connection`, backed by `socket`. Read and write buffers
     /// are initialized.
-    pub fn new(socket: TcpStream) -> Connection {
+    pub fn new(send_stream: quinn::SendStream, recv_stream: quinn::RecvStream) -> Connection {
         Connection {
-            stream: BufWriter::new(socket),
+            send_stream: BufWriter::new(send_stream),
+            recv_stream: BufReader::new(recv_stream),
+
             // Default to a 4KB read buffer. For the use case of mini redis,
             // this is fine. However, real applications will want to tune this
             // value to their specific use case. There is a high likelihood that
@@ -66,7 +72,7 @@ impl Connection {
             //
             // On success, the number of bytes is returned. `0` indicates "end
             // of stream".
-            if 0 == self.stream.read_buf(&mut self.buffer).await? {
+            if 0 == self.recv_stream.read_buf(&mut self.buffer).await? {
                 // The remote closed the connection. For this to be a clean
                 // shutdown, there should be no data in the read buffer. If
                 // there is, this means that the peer closed the socket while
@@ -160,7 +166,7 @@ impl Connection {
         match frame {
             Frame::Array(val) => {
                 // Encode the frame type prefix. For an array, it is `*`.
-                self.stream.write_u8(b'*').await?;
+                self.send_stream.write_u8(b'*').await?;
 
                 // Encode the length of the array.
                 self.write_decimal(val.len() as u64).await?;
@@ -177,36 +183,36 @@ impl Connection {
         // Ensure the encoded frame is written to the socket. The calls above
         // are to the buffered stream and writes. Calling `flush` writes the
         // remaining contents of the buffer to the socket.
-        self.stream.flush().await
+        self.send_stream.flush().await
     }
 
     /// Write a frame literal to the stream
     async fn write_value(&mut self, frame: &Frame) -> io::Result<()> {
         match frame {
             Frame::Simple(val) => {
-                self.stream.write_u8(b'+').await?;
-                self.stream.write_all(val.as_bytes()).await?;
-                self.stream.write_all(b"\r\n").await?;
+                self.send_stream.write_u8(b'+').await?;
+                self.send_stream.write_all(val.as_bytes()).await?;
+                self.send_stream.write_all(b"\r\n").await?;
             }
             Frame::Error(val) => {
-                self.stream.write_u8(b'-').await?;
-                self.stream.write_all(val.as_bytes()).await?;
-                self.stream.write_all(b"\r\n").await?;
+                self.send_stream.write_u8(b'-').await?;
+                self.send_stream.write_all(val.as_bytes()).await?;
+                self.send_stream.write_all(b"\r\n").await?;
             }
             Frame::Integer(val) => {
-                self.stream.write_u8(b':').await?;
+                self.send_stream.write_u8(b':').await?;
                 self.write_decimal(*val).await?;
             }
             Frame::Null => {
-                self.stream.write_all(b"$-1\r\n").await?;
+                self.send_stream.write_all(b"$-1\r\n").await?;
             }
             Frame::Bulk(val) => {
                 let len = val.len();
 
-                self.stream.write_u8(b'$').await?;
+                self.send_stream.write_u8(b'$').await?;
                 self.write_decimal(len as u64).await?;
-                self.stream.write_all(val).await?;
-                self.stream.write_all(b"\r\n").await?;
+                self.send_stream.write_all(val).await?;
+                self.send_stream.write_all(b"\r\n").await?;
             }
             // Encoding an `Array` from within a value cannot be done using a
             // recursive strategy. In general, async fns do not support
@@ -228,8 +234,8 @@ impl Connection {
         write!(&mut buf, "{}", val)?;
 
         let pos = buf.position() as usize;
-        self.stream.write_all(&buf.get_ref()[..pos]).await?;
-        self.stream.write_all(b"\r\n").await?;
+        self.send_stream.write_all(&buf.get_ref()[..pos]).await?;
+        self.send_stream.write_all(b"\r\n").await?;
 
         Ok(())
     }

@@ -6,10 +6,12 @@
 //!
 //! The `clap` crate is used for parsing arguments.
 
+use std::sync::Arc;
+
 use mini_redis::{server, DEFAULT_PORT};
 
 use clap::Parser;
-use tokio::net::TcpListener;
+use quinn::Endpoint;
 use tokio::signal;
 
 #[cfg(feature = "otel")]
@@ -33,12 +35,34 @@ pub async fn main() -> mini_redis::Result<()> {
     set_up_logging()?;
 
     let cli = Cli::parse();
-    let port = cli.port.unwrap_or(DEFAULT_PORT);
+    let _port = cli.port.unwrap_or(DEFAULT_PORT);
 
-    // Bind a TCP listener
-    let listener = TcpListener::bind(&format!("127.0.0.1:{}", port)).await?;
+    pub fn make_server_endpoint(
+        bind_addr: std::net::SocketAddr,
+    ) -> mini_redis::Result<quinn::Endpoint> {
+        let server_config = configure_server()?;
+        let endpoint = Endpoint::server(server_config, bind_addr)?;
+        Ok(endpoint)
+    }
 
-    server::run(listener, signal::ctrl_c()).await;
+    pub fn configure_server() -> mini_redis::Result<quinn::ServerConfig> {
+        let crt = std::fs::read("cert/cert.der")?;
+        let key = std::fs::read("cert/key.der")?;
+
+        let priv_key = rustls::PrivateKey(key);
+        let cert_chain = vec![rustls::Certificate(crt)];
+
+        let mut server_config = quinn::ServerConfig::with_single_cert(cert_chain, priv_key)?;
+        if let Some(transport_config) = Arc::get_mut(&mut server_config.transport) {
+            transport_config.max_concurrent_uni_streams(0_u8.into());
+        }
+
+        Ok(server_config)
+    }
+
+    let endpoint = make_server_endpoint(([127, 0, 0, 1], 5000).into())?;
+
+    server::run(endpoint, signal::ctrl_c()).await;
 
     Ok(())
 }
