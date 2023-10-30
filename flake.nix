@@ -59,6 +59,8 @@
 
             lldb_11
             libclang
+
+            bacon
           ];
         };
 
