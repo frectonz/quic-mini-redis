@@ -50,7 +50,7 @@ pub struct BufferedClient {
 impl BufferedClient {
     /// Create a new client request buffer
     ///
-    /// The `Client` performs Redis commands directly on the TCP connection. Only a
+    /// The `Client` performs Redis commands directly on the QUIC connection. Only a
     /// single request may be in-flight at a given time and operations require
     /// mutable access to the `Client` handle. This prevents using a single Redis
     /// connection from multiple Tokio tasks.

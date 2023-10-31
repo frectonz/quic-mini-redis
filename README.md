@@ -103,9 +103,9 @@ There is no support for persistence yet.
 
 The project demonstrates a number of useful patterns, including:
 
-### TCP server
+### QUIC server
 
-[`server.rs`](src/server.rs) starts a TCP server that accepts connections,
+[`server.rs`](src/server.rs) starts a QUIC server that accepts connections,
 and spawns a new task per connection. It gracefully handles `accept` errors.
 
 ### Client library

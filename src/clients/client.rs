@@ -22,8 +22,8 @@ use tracing::{debug, instrument};
 ///
 /// Requests are issued using the various methods of `Client`.
 pub struct Client {
-    /// The TCP connection decorated with the redis protocol encoder / decoder
-    /// implemented using a buffered `TcpStream`.
+    /// The QUIC connection decorated with the redis protocol encoder / decoder
+    /// implemented using a buffered `SendStream` and `RecvStream`.
     ///
     /// When `Listener` receives an inbound connection, the `TcpStream` is
     /// passed to `Connection::new`, which initializes the associated buffers.
@@ -75,8 +75,8 @@ impl Client {
     /// ```
     ///
     pub async fn connect<T: ToSocketAddrs>(addr: T) -> crate::Result<Client> {
-        // The `addr` argument is passed directly to `TcpStream::connect`. This
-        // performs any asynchronous DNS lookup and attempts to establish the TCP
+        // The `addr` argument is used to perform a DNS look up, and then
+        // passed to `Endpoint::connect`. This attempts to establish the QUIC
         // connection. An error at either step returns an error, which is then
         // bubbled up to the caller of `mini_redis` connect.
 

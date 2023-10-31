@@ -13,7 +13,7 @@ use tokio::time::{self, Duration};
 use tracing::{debug, error, info, instrument};
 
 /// Server listener state. Created in the `run` call. It includes a `run` method
-/// which performs the TCP listening and initialization of per-connection state.
+/// which performs the QUIC listening and initialization of per-connection state.
 #[derive(Debug)]
 struct Listener {
     /// Shared database handle.
@@ -74,8 +74,8 @@ struct Handler {
     /// will need to interact with `db` in order to complete the work.
     db: Db,
 
-    /// The TCP connection decorated with the redis protocol encoder / decoder
-    /// implemented using a buffered `TcpStream`.
+    /// The QUIC connection decorated with the redis protocol encoder / decoder
+    /// implemented using a buffered `SendStream` and `RecvStream`.
     ///
     /// When `Listener` receives an inbound connection, the `TcpStream` is
     /// passed to `Connection::new`, which initializes the associated buffers.
@@ -159,7 +159,7 @@ pub async fn run(endpoint: Endpoint, shutdown: impl Future) {
     // https://docs.rs/tokio/*/tokio/macro.select.html
     tokio::select! {
         res = server.run() => {
-            // If an error is received here, accepting connections from the TCP
+            // If an error is received here, accepting connections from the QUIC
             // listener failed multiple times and the server is giving up and
             // shutting down.
             //
