@@ -56,7 +56,7 @@ impl Connection {
     ///
     /// # Returns
     ///
-    /// On success, the received frame is returned. If the `TcpStream`
+    /// On success, the received frame is returned. If the `RecvStream`
     /// is closed in a way that doesn't break a frame in half, it returns
     /// `None`. Otherwise, an error is returned.
     pub async fn read_frame(&mut self) -> crate::Result<Option<Frame>> {

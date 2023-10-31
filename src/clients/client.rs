@@ -8,6 +8,7 @@ use crate::{Connection, Frame};
 
 use async_stream::try_stream;
 use bytes::Bytes;
+use quinn::Endpoint;
 use std::io::{Error, ErrorKind};
 use std::time::Duration;
 use tokio::net::{lookup_host, ToSocketAddrs};
@@ -30,6 +31,9 @@ pub struct Client {
     /// `Connection` allows the handler to operate at the "frame" level and keep
     /// the byte level protocol parsing details encapsulated in `Connection`.
     connection: Connection,
+
+    // The QUIC endpoint
+    endpoint: Endpoint,
 }
 
 /// A client that has entered pub/sub mode.
@@ -98,7 +102,15 @@ impl Client {
         let (send_stream, recv_stream) = conn.open_bi().await?;
         let connection = Connection::new(send_stream, recv_stream);
 
-        Ok(Client { connection })
+        Ok(Client {
+            connection,
+            endpoint,
+        })
+    }
+
+    /// Gracefully close the connection
+    pub async fn close(&self) {
+        self.endpoint.wait_idle().await;
     }
 
     /// Ping to the server.
