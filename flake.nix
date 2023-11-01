@@ -48,17 +48,6 @@
           buildInputs = [
             rust-bin.stable.latest.default
             rust-analyzer
-            just
-            fzf
-
-            parallel
-            hyperfine
-
-            go
-            gopls
-
-            lldb_11
-            libclang
 
             bacon
           ];
